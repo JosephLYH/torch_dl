@@ -6,8 +6,6 @@ import time
 from collections import deque
 from pathlib import Path
 
-import gym
-import gym_super_mario_bros
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -34,10 +32,8 @@ class BattleshipEnv:
         self.player_turn = 0
         self.turns = 0
         
-        self.ship_sunk = [0, 0]
         self.grid = [torch.zeros((2, 10, 10)) for _ in range(2)]
         self.occupied = [{
-            'all': set(),
             0: set(),
             1: set(),
             2: set(),
@@ -47,14 +43,14 @@ class BattleshipEnv:
         } for _ in range(2)]
 
     def render(self):
-        print("Player 1's board:")
+        print("Player 0's board:")
         print(self.grid[0][0])
-        print("Player 1's guesses:")
+        print("Player 0's guesses:")
         print(self.grid[0][1])
         print()
-        print("Player 2's board:")
+        print("Player 1's board:")
         print(self.grid[1][0])
-        print("Player 2's guesses:")
+        print("Player 1's guesses:")
         print(self.grid[1][1])
 
     def random_init(self):
@@ -65,36 +61,33 @@ class BattleshipEnv:
                     x = random.randint(0, 9)
                     y = random.randint(0, 9)
                     direction = random.randint(0, 1)
-                    if self.check_valid(player, x, y, direction, self.ship_lengths[ship]):
+                    if self.check_valid_init(player, x, y, direction, self.ship_lengths[ship]):
                         self.place_ship(player, x, y, direction, ship)
                         break
 
-    def check_valid(self, player, x, y, direction, length):
+    def check_valid_init(self, player, x, y, direction, length):
         if direction == 0:
             if x + length > 10: 
                 return False
             for i in range(length):
-                if (x+i, y) in self.occupied[player]['all']:
+                if self.grid[player][0][y][x+i] != 0:
                     return False
         else:
             if y + length > 10: 
                 return False
             for i in range(length):
-                if (x, y+i) in self.occupied[player]['all']:
+                if self.grid[player][0][y+i][x] != 0:
                     return False
-
         return True
     
     def place_ship(self, player, x, y, direction, ship):
         if direction == 0:
             for i in range(self.ship_lengths[ship]):
                 self.grid[player][0][y][x+i] = 1
-                self.occupied[player]['all'].add((x+i, y))
                 self.occupied[player][ship].add((x+i, y))
         else:
             for i in range(self.ship_lengths[ship]):
                 self.grid[player][0][y+i][x] = 1
-                self.occupied[player]['all'].add((x, y+i))
                 self.occupied[player][ship].add((x, y+i))
 
     def check_sunk(self, player, x, y):
@@ -110,22 +103,43 @@ class BattleshipEnv:
         reward = -1
         self.turns += 1
         x, y = action
+
+        # wait for player's turn
+        while self.player_turn != player:
+            pass
         
+        # check if action is valid
         if self.grid[player][1][y][x] != 0:
-            return self.grid[player], reward, self.game_over
+            self.turns -= 1
+            return copy.deepcopy(self.grid[player]), reward, self.game_over
         
-        if action in self.occupied[1 - player]['all']:
+        if self.grid[1 - player][0][y][x] != 0:
             reward = 1
             self.grid[player][1][y][x] = 2
-            for ship in range(5):
-                
 
+            for ship in self.occupied[1 - player]:
+                
+                # check if ship is hit
+                if action in self.occupied[1 - player][ship]:
+                    self.occupied[1 - player][ship].remove(action)
+
+                    # check if ship is sunk
+                    if len(self.occupied[1 - player][ship]) == 0:
+                        del self.occupied[1 - player][ship]
+
+                        # check if game is over
+                        if len(self.occupied[1 - player]) == 0:
+                            self.game_over = True
+                            self.winner = player
+                            reward = 10
+                            return copy.deepcopy(self.grid[player]), reward, self.game_over
         else:
             reward = 0
             self.grid[player][1][y][x] = 1
-
+        
         next_state = copy.deepcopy(self.grid[player])
 
+        self.player_turn = 1 - self.player_turn
         return next_state, reward, self.game_over
 
 if __name__ == '__main__':
