@@ -1,29 +1,28 @@
-import torch
-import numpy as np
-from collections import deque
 import random
+from collections import deque
+
+import numpy as np
+import torch
+from torch import nn
 
 from lib.nets import MarioNet
 
-class Agent:
-    def __init__():
-        pass
+
+class Agent():
+    def __init__(self):
+        """Init"""
 
     def act(self, state):
         """Given a state, choose an epsilon-greedy action"""
-        pass
 
     def cache(self, experience):
         """Add the experience to memory"""
-        pass
 
     def recall(self):
         """Sample experiences from memory"""
-        pass
 
     def learn(self):
         """Update online action value (Q) function with a batch of experiences"""
-        pass
 
 class Mario(Agent):
     def __init__(self, state_dim, action_dim, save_dir):

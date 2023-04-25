@@ -10,6 +10,7 @@ except ImportError:
 class MarioNet(nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
+
         C, H, W = input_dim
 
         if H != 84:
@@ -46,18 +47,22 @@ class MarioNet(nn.Module):
             return self.target(input)
         
 class BattleshipNet(nn.Module):
-    def __init__(self, input_dim, num_heads):
+    def __init__(self, in_channels=1, out_channels=1, num_heads=4, embedding_dims=100):
         super().__init__()
-        C, _, _ = input_dim
 
         self.online = nn.Sequential(
-            nn.Conv2d(C, 32, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(32),
-            FoundationTransformerBlock(32, 4, pre_norm=False),
-            FoundationTransformerBlock(32, 4),
-            nn.Conv2d(32, C, 1, 1, 1, bias=False),
+            nn.Conv2d(in_channels, 16, 3, 1, 1, bias=False),
+            ResidualBlock(16),
+            FoundationTransformerBlock(16, num_heads, embedding_dims),
+            FoundationTransformerBlock(16, num_heads, embedding_dims),
+            nn.Conv2d(16, out_channels, 1, 1, bias=False),
+            nn.Softmax2d(),
         )
 
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_uniform_(m.weight)
+            
         self.target = copy.deepcopy(self.online)
 
         # Q_target parameters are frozen.
@@ -69,6 +74,3 @@ class BattleshipNet(nn.Module):
             return self.online(input)
         elif model == "target":
             return self.target(input)
-
-if __name__ == '__main__':
-    BattleshipNet((4, 84, 84), 6)(torch.rand((1, 4, 84, 84)), "online")

@@ -21,11 +21,11 @@ class ResidualBlock(nn.Module):
         return x + residual
     
 class AttentionBlock(nn.Module):
-    def __init__(self, in_channels, num_heads, pre_norm=True):
+    def __init__(self, in_channels, num_heads, embedding_dims, pre_norm=True):
         super().__init__()
         self.pre_norm = nn.BatchNorm2d(in_channels) if pre_norm else None
         self.conv1 = nn.Conv2d(in_channels, in_channels, 3, 1, 1, bias=False)
-        self.attn = nn.MultiheadAttention(7056, num_heads)
+        self.attn = nn.MultiheadAttention(embedding_dims, num_heads)
         self.norm = nn.BatchNorm2d(in_channels, eps=1e-3, momentum=0.01)
         self.conv2 = nn.Conv2d(in_channels, in_channels, 3, 1, 1, bias=False)
 
@@ -42,10 +42,10 @@ class AttentionBlock(nn.Module):
         return x + residual
     
 class FoundationTransformerBlock(nn.Module):
-    def __init__(self, in_channels, num_heads, pre_norm=True):
+    def __init__(self, in_channels, num_heads, embedding_dims, pre_norm=True):
         super().__init__()
         self.res = ResidualBlock(in_channels, pre_norm)
-        self.attn = AttentionBlock(in_channels, num_heads)
+        self.attn = AttentionBlock(in_channels, num_heads, embedding_dims)
 
     def forward(self, x):
         x = self.res(x)
@@ -53,4 +53,4 @@ class FoundationTransformerBlock(nn.Module):
         return x
     
 if __name__ == '__main__':
-    AttentionBlock(32)(torch.randn(1, 32, 84, 84))
+    AttentionBlock(2, 4, 100)(torch.randn(1, 2, 10, 10))
