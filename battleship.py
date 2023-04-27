@@ -10,10 +10,17 @@ PLAYERS = 1
 if __name__ == '__main__':
     env = BattleshipEnv(players=PLAYERS)
     agents = [Battleship(i, env.action_dim, env.action_dim) for i in range(PLAYERS)]
-    mean_turns = MeanMetric()
+    mean_metrics = {
+        'turns': MeanMetric(),
+        'q': MeanMetric(),
+        'loss': MeanMetric(),
+    }
 
     episodes = 1000000
     for e in range(episodes):
+        mean_metrics['loss'].reset()
+        mean_metrics['q'].reset()
+
         state = env.random_init()
 
         # Play the game!
@@ -28,11 +35,19 @@ if __name__ == '__main__':
             agents[env.player_turn].cache(state, next_state, action, reward, done)
             q, loss = agents[env.player_turn].learn()
 
+            if q is not None and loss is not None:
+                mean_metrics['loss'].update(loss)
+                mean_metrics['q'].update(q)
+
             if done:
-                mean_turns.update(env.turns)
+                mean_metrics['turns'].update(env.turns)
+                metrics = {'turns': env.turns, 'mean_turns': mean_metrics['turns'].value(), 'loss': mean_metrics['loss'].value(), 'q': mean_metrics['loss'].value()}
+                agents[env.player_turn].write_tb(metrics)
                 print(f'exploration rate: {agents[env.player_turn].exploration_rate}')
                 print(f'episode {e}, step {env.turns}, agent {env.player_turn}')
-                print(f'Mean turns: {mean_turns.mean()}')
+                print(f"mean turns: {mean_metrics['turns'].value()}")
+                print(f"mean loss: {mean_metrics['loss'].value()}")
+                print(f"mean q: {mean_metrics['q'].value()}")
                 print()
                 break
 

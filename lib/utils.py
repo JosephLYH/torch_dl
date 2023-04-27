@@ -1,11 +1,15 @@
 from torch.utils.tensorboard import SummaryWriter
 
-def write_tb(step, writer: SummaryWriter, model, optimizer, scaler):
+def write_tb(step, writer: SummaryWriter, metrics, model, optimizer, scaler):
+    if metrics:
+        for name, value in metrics.items():
+            writer.add_scalar(name, value, step, new_style=True)
+
     if model:
         for name, param in model.named_parameters():
-            writer.add_histogram('/'.join(name.split('.')[1:]), param, step)
+            writer.add_histogram('/'.join(name.split('.')), param, step)
             if hasattr(param, 'grad') and param.grad is not None:
-                writer.add_histogram('/'.join(name.split('.')[1:]) + '/grad', param.grad, step)
+                writer.add_histogram('/'.join(name.split('.')) + '/grad', param.grad, step)
 
     if optimizer:
         pass

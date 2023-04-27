@@ -187,7 +187,7 @@ class Battleship(Agent):
         self.batch_size = 1024
         self.gamma = 0.9
         self.exploration_rate = 1
-        self.exploration_rate_decay = 0.99999975
+        self.exploration_rate_decay = 0.999975
         self.exploration_rate_min = 0.1
         self.curr_step = 0
         self.save_every = 5000  # no. of experiences between saving Net
@@ -200,7 +200,7 @@ class Battleship(Agent):
 
         self.burnin = self.batch_size  # min. experiences before training
         self.learn_every = 64  # no. of experiences between updates to Q_online
-        self.sync_every = 64  # no. of experiences between Q_target & Q_online sync
+        self.sync_every = 2048  # no. of experiences between Q_target & Q_online sync
 
         self.time_start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
         self.save_dir = os.path.join('battleship', self.time_start, 'checkpoints', str(self.player))
@@ -212,7 +212,7 @@ class Battleship(Agent):
         state = state.to(self.device)
 
         if np.random.rand() < self.exploration_rate: # EXPLORE
-            y, x = np.unravel_index(torch.argmax(torch.rand(*self.action_dim)).cpu(), self.action_dim)
+            y, x = np.unravel_index(torch.argmax(torch.where(state == 0, torch.rand(*self.action_dim).to(self.device), torch.tensor(1e-9).to(self.device))).cpu(), self.action_dim) # random action from legal actions
         else: # EXPLOIT
             action_values = self.net(state.unsqueeze(0).unsqueeze(0), model='online')
             y, x = np.unravel_index(torch.argmax(action_values.squeeze(0).squeeze(0)).cpu(), self.action_dim)
@@ -238,7 +238,7 @@ class Battleship(Agent):
         next_state = torch.stack(next_state).unsqueeze(1)
         action = torch.stack(action)
         reward = torch.tensor(reward)
-        done = torch.tensor(done)     
+        done = torch.tensor(done)
         return state, next_state, action, reward, done
 
     def td_estimate(self, state, action):
@@ -263,6 +263,7 @@ class Battleship(Agent):
         best_action_flatten = torch.argmax(next_state_Q.squeeze(1).view(self.batch_size, -1), -1)
         best_action = torch.stack([best_action_flatten // self.action_dim[1], best_action_flatten % self.action_dim[1]], -1)
         best_action_x, best_action_y = torch.tensor(list(zip(*best_action)))
+
         next_Q = self.net(next_state, model='target')
         next_Q = torch.where(next_state == 0, next_Q, torch.tensor(-1e9).cuda()) # mask out illegal moves
         next_Q = next_Q[np.arange(0, self.batch_size), 0, best_action_x, best_action_y]
@@ -323,9 +324,10 @@ class Battleship(Agent):
         # Backpropagate loss through Q_online
         loss = self.update_Q_online(td_est, td_tgt)
 
-        write_tb(self.curr_step, self.writer, self.net, self.optimizer, self.scaler)
-
         return (td_est.mean().item(), loss)
+    
+    def write_tb(self, metrics):
+        write_tb(self.curr_step, self.writer, metrics, self.net, self.optimizer, self.scaler)
     
     def to(self, device):
         self.device = device

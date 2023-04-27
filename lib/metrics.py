@@ -15,5 +15,5 @@ class MeanMetric(nn.Module):
         self._mean = (self._mean * self._count + val * n) / (self._count + n)
         self._count += n
 
-    def mean(self):
+    def value(self):
         return self._mean
