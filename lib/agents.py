@@ -1,11 +1,16 @@
+import os
 import random
+import time
 from collections import deque
 
 import numpy as np
 import torch
 from torch import nn
+from torch.utils.tensorboard import SummaryWriter
 
-from lib.nets import MarioNet
+from lib.nets import BattleshipNet, MarioNet
+from lib.utils import write_tb
+from lib.optimizers.lion import Lion
 
 
 class Agent():
@@ -168,3 +173,160 @@ class Mario(Agent):
         loss = self.update_Q_online(td_est, td_tgt)
 
         return (td_est.mean().item(), loss)
+    
+class Battleship(Agent):
+    def __init__(self, player, state_dim, action_dim):
+        super().__init__()
+
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.player = player
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+
+        self.memory = deque(maxlen=32768)
+        self.batch_size = 1024
+        self.gamma = 0.9
+        self.exploration_rate = 1
+        self.exploration_rate_decay = 0.99999975
+        self.exploration_rate_min = 0.1
+        self.curr_step = 0
+        self.save_every = 5000  # no. of experiences between saving Net
+
+        # DNN to predict the most optimal action - we implement this in the Learn section
+        self.net = BattleshipNet()
+        self.net = self.net.cuda()
+        self.optimizer = Lion(self.net.parameters(), lr=1e-4, weight_decay=1e-2)
+        self.loss_fn = torch.nn.SmoothL1Loss()
+
+        self.burnin = self.batch_size  # min. experiences before training
+        self.learn_every = 64  # no. of experiences between updates to Q_online
+        self.sync_every = 64  # no. of experiences between Q_target & Q_online sync
+
+        self.time_start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+        self.save_dir = os.path.join('battleship', self.time_start, 'checkpoints', str(self.player))
+        self.scaler = torch.cuda.amp.GradScaler(growth_interval=100)
+        self.scaler._init_scale = 2.**8
+        self.writer = SummaryWriter(log_dir=os.path.join('battleship', self.time_start, 'tb', str(self.player)))
+
+    def act(self, state):
+        state = state.to(self.device)
+
+        if np.random.rand() < self.exploration_rate: # EXPLORE
+            y, x = np.unravel_index(torch.argmax(torch.rand(*self.action_dim)).cpu(), self.action_dim)
+        else: # EXPLOIT
+            action_values = self.net(state.unsqueeze(0).unsqueeze(0), model='online')
+            y, x = np.unravel_index(torch.argmax(action_values.squeeze(0).squeeze(0)).cpu(), self.action_dim)
+        
+        action_idx = torch.tensor([x, y])
+
+        # decrease exploration_rate
+        self.exploration_rate *= self.exploration_rate_decay
+        self.exploration_rate = max(self.exploration_rate_min, self.exploration_rate)
+
+        # increment step
+        self.curr_step += 1
+        return action_idx
+    
+    def cache(self, state, next_state, action, reward, done):
+        self.memory.append((state, next_state, action, reward, done))
+
+    def recall(self):
+        batch = random.sample(self.memory, self.batch_size)
+        state, next_state, action, reward, done = list(zip(*batch))
+
+        state = torch.stack(state).unsqueeze(1)
+        next_state = torch.stack(next_state).unsqueeze(1)
+        action = torch.stack(action)
+        reward = torch.tensor(reward)
+        done = torch.tensor(done)     
+        return state, next_state, action, reward, done
+
+    def td_estimate(self, state, action):
+        state = state.to(self.device)
+        action = action.to(self.device)
+        
+        action_x, action_y = torch.tensor(list(zip(*action)))
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            current_Q = self.net(state, model='online')
+            current_Q = torch.where(state == 0, current_Q, torch.tensor(-1e9).cuda()) # mask out illegal moves
+            current_Q = current_Q[np.arange(0, self.batch_size), 0, action_x, action_y] # Q_online(s,a)
+        return current_Q
+
+    @torch.no_grad()
+    def td_target(self, reward, next_state, done):
+        reward = reward.to(self.device)
+        next_state = next_state.to(self.device)
+        done = done.to(self.device)
+
+        next_state_Q = self.net(next_state, model='online')
+        next_state_Q = torch.where(next_state == 0, next_state_Q, torch.tensor(-1e9).cuda()) # mask out illegal moves
+        best_action_flatten = torch.argmax(next_state_Q.squeeze(1).view(self.batch_size, -1), -1)
+        best_action = torch.stack([best_action_flatten // self.action_dim[1], best_action_flatten % self.action_dim[1]], -1)
+        best_action_x, best_action_y = torch.tensor(list(zip(*best_action)))
+        next_Q = self.net(next_state, model='target')
+        next_Q = torch.where(next_state == 0, next_Q, torch.tensor(-1e9).cuda()) # mask out illegal moves
+        next_Q = next_Q[np.arange(0, self.batch_size), 0, best_action_x, best_action_y]
+        return (reward + (1 - done.float()) * self.gamma * next_Q).float()
+    
+    def update_Q_online(self, td_estimate, td_target):
+        td_estimate = td_estimate.to(self.device)
+        td_target = td_target.to(self.device)
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            loss = self.loss_fn(td_estimate, td_target)
+        self.optimizer.zero_grad()
+        self.scaler.scale(loss).backward()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        return loss.item()
+
+    def sync_Q_target(self):
+        self.net.target.load_state_dict(self.net.online.state_dict())
+
+    def save(self):
+        save_path = os.path.join(self.save_dir, f'{self.curr_step:020d}.pt')
+        os.makedirs(self.save_dir, exist_ok=True)
+        torch.save(
+            {
+                'model': self.net.state_dict(), 
+                'optimizer': self.optimizer.state_dict(),
+                'scaler': self.scaler.state_dict(),
+                'curr_step': self.curr_step,
+                'exploration_rate': self.exploration_rate,
+                'memory': self.memory,
+            },
+            save_path,
+        )
+        print(f'Net {self.player} saved to {save_path} at step {self.curr_step}')
+
+    def learn(self):
+        if self.curr_step % self.sync_every == 0:
+            self.sync_Q_target()
+
+        if self.curr_step % self.save_every == 0:
+            self.save()
+
+        if self.curr_step < self.burnin:
+            return None, None
+
+        if self.curr_step % self.learn_every != 0:
+            return None, None
+
+        # Sample from memory
+        state, next_state, action, reward, done = self.recall()
+
+        # Get TD Estimate
+        td_est = self.td_estimate(state, action)
+
+        # Get TD Target
+        td_tgt = self.td_target(reward, next_state, done)
+
+        # Backpropagate loss through Q_online
+        loss = self.update_Q_online(td_est, td_tgt)
+
+        write_tb(self.curr_step, self.writer, self.net, self.optimizer, self.scaler)
+
+        return (td_est.mean().item(), loss)
+    
+    def to(self, device):
+        self.device = device
+        self.net = self.net.to(device)

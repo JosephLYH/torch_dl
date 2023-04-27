@@ -52,17 +52,29 @@ class BattleshipNet(nn.Module):
 
         self.online = nn.Sequential(
             nn.Conv2d(in_channels, 16, 3, 1, 1, bias=False),
-            ResidualBlock(16),
-            FoundationTransformerBlock(16, num_heads, embedding_dims),
-            FoundationTransformerBlock(16, num_heads, embedding_dims),
-            nn.Conv2d(16, out_channels, 1, 1, bias=False),
-            nn.Softmax2d(),
+            nn.BatchNorm2d(16, momentum=0.01, eps=1e-3),
+            ResidualBlock(16, pre_norm=False),
+
+            nn.BatchNorm2d(16, momentum=0.01, eps=1e-3),
+            nn.Conv2d(16, 32, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(32, momentum=0.01, eps=1e-3),
+            ResidualBlock(32, pre_norm=False),
+            FoundationTransformerBlock(32, num_heads, embedding_dims),
+
+            nn.BatchNorm2d(32, momentum=0.01, eps=1e-3),
+            nn.Conv2d(32, 64, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(64, momentum=0.01, eps=1e-3),
+            ResidualBlock(64, pre_norm=False),
+            FoundationTransformerBlock(64, num_heads, embedding_dims),
+            FoundationTransformerBlock(64, num_heads, embedding_dims),
+
+            nn.Conv2d(64, out_channels, 1, 1, bias=False),
         )
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_uniform_(m.weight)
-            
+        
         self.target = copy.deepcopy(self.online)
 
         # Q_target parameters are frozen.
