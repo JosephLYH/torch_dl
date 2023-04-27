@@ -212,7 +212,7 @@ class Battleship(Agent):
         state = state.to(self.device)
 
         if np.random.rand() < self.exploration_rate: # EXPLORE
-            y, x = np.unravel_index(torch.argmax(torch.where(state == 0, torch.rand(*self.action_dim).to(self.device), torch.tensor(1e-9).to(self.device))).cpu(), self.action_dim) # random action from legal actions
+            y, x = np.unravel_index(torch.argmax(torch.where(state == 0, torch.rand(*self.action_dim).to(self.device), torch.tensor(-1e4).to(self.device))).cpu(), self.action_dim) # random action from legal actions
         else: # EXPLOIT
             action_values = self.net(state.unsqueeze(0).unsqueeze(0), model='online')
             y, x = np.unravel_index(torch.argmax(action_values.squeeze(0).squeeze(0)).cpu(), self.action_dim)
@@ -248,7 +248,7 @@ class Battleship(Agent):
         action_x, action_y = torch.tensor(list(zip(*action)))
         with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
             current_Q = self.net(state, model='online')
-            current_Q = torch.where(state == 0, current_Q, torch.tensor(-1e9).cuda()) # mask out illegal moves
+            current_Q = torch.where(state == 0, current_Q, torch.tensor(-1e4).cuda()) # mask out illegal moves
             current_Q = current_Q[np.arange(0, self.batch_size), 0, action_x, action_y] # Q_online(s,a)
         return current_Q
 
@@ -259,13 +259,13 @@ class Battleship(Agent):
         done = done.to(self.device)
 
         next_state_Q = self.net(next_state, model='online')
-        next_state_Q = torch.where(next_state == 0, next_state_Q, torch.tensor(-1e9).cuda()) # mask out illegal moves
+        next_state_Q = torch.where(next_state == 0, next_state_Q, torch.tensor(-1e4).cuda()) # mask out illegal moves
         best_action_flatten = torch.argmax(next_state_Q.squeeze(1).view(self.batch_size, -1), -1)
         best_action = torch.stack([best_action_flatten // self.action_dim[1], best_action_flatten % self.action_dim[1]], -1)
         best_action_x, best_action_y = torch.tensor(list(zip(*best_action)))
 
         next_Q = self.net(next_state, model='target')
-        next_Q = torch.where(next_state == 0, next_Q, torch.tensor(-1e9).cuda()) # mask out illegal moves
+        next_Q = torch.where(next_state == 0, next_Q, torch.tensor(-1e4).cuda()) # mask out illegal moves
         next_Q = next_Q[np.arange(0, self.batch_size), 0, best_action_x, best_action_y]
         return (reward + (1 - done.float()) * self.gamma * next_Q).float()
     
