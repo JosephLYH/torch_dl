@@ -175,13 +175,14 @@ class Mario(Agent):
         return (td_est.mean().item(), loss)
     
 class Battleship(Agent):
-    def __init__(self, player, state_dim, action_dim):
+    def __init__(self, player, state_dim, action_dim, episodes=1000000):
         super().__init__()
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.player = player
         self.state_dim = state_dim
         self.action_dim = action_dim
+        self.episodes = episodes
 
         self.memory = deque(maxlen=32768)
         self.batch_size = 1024
@@ -193,10 +194,14 @@ class Battleship(Agent):
         self.save_every = 5000  # no. of experiences between saving Net
 
         # DNN to predict the most optimal action - we implement this in the Learn section
+        self.enable_f16 = True
         self.net = BattleshipNet()
         self.net = self.net.cuda()
-        self.optimizer = Lion(self.net.parameters(), lr=1e-4, weight_decay=1e-2)
+        self.optimizer = Lion(self.net.parameters(), lr=1, weight_decay=1e-2)
         self.loss_fn = torch.nn.SmoothL1Loss()
+        self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: max(1e-4 - (1e-4 - 1e-6)*step/(episodes*50), 1e-6))
+        self.scaler = torch.cuda.amp.GradScaler(growth_interval=100, enabled=self.enable_f16)
+        self.scaler._init_scale = 2.**8
 
         self.burnin = self.batch_size  # min. experiences before training
         self.learn_every = 64  # no. of experiences between updates to Q_online
@@ -204,15 +209,13 @@ class Battleship(Agent):
 
         self.time_start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
         self.save_dir = os.path.join('battleship', self.time_start, 'checkpoints', str(self.player))
-        self.scaler = torch.cuda.amp.GradScaler(growth_interval=100)
-        self.scaler._init_scale = 2.**8
         self.writer = SummaryWriter(log_dir=os.path.join('battleship', self.time_start, 'tb', str(self.player)))
 
     def act(self, state):
         state = state.to(self.device)
 
         if np.random.rand() < self.exploration_rate: # EXPLORE
-            y, x = np.unravel_index(torch.argmax(torch.where(state == 0, torch.rand(*self.action_dim).to(self.device), torch.tensor(-1e4).to(self.device))).cpu(), self.action_dim) # random action from legal actions
+            y, x = np.unravel_index(torch.argmax(torch.where(state == 0, torch.rand(*self.action_dim).to(self.device), torch.tensor(-1e2).to(self.device))).cpu(), self.action_dim) # random action from legal actions
         else: # EXPLOIT
             action_values = self.net(state.unsqueeze(0).unsqueeze(0), model='online')
             y, x = np.unravel_index(torch.argmax(action_values.squeeze(0).squeeze(0)).cpu(), self.action_dim)
@@ -248,8 +251,8 @@ class Battleship(Agent):
         action_x, action_y = torch.tensor(list(zip(*action)))
         with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
             current_Q = self.net(state, model='online')
-            current_Q = torch.where(state == 0, current_Q, torch.tensor(-1e4).cuda()) # mask out illegal moves
-            current_Q = current_Q[np.arange(0, self.batch_size), 0, action_x, action_y] # Q_online(s,a)
+        current_Q = torch.where(state == 0, current_Q, torch.tensor(-1e2).cuda()) # mask out illegal moves
+        current_Q = current_Q[np.arange(0, self.batch_size), 0, action_x, action_y] # Q_online(s,a)
         return current_Q
 
     @torch.no_grad()
@@ -257,27 +260,30 @@ class Battleship(Agent):
         reward = reward.to(self.device)
         next_state = next_state.to(self.device)
         done = done.to(self.device)
-
-        next_state_Q = self.net(next_state, model='online')
-        next_state_Q = torch.where(next_state == 0, next_state_Q, torch.tensor(-1e4).cuda()) # mask out illegal moves
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=self.enable_f16):
+            next_state_Q = self.net(next_state, model='online')
+        next_state_Q = next_state_Q.float()
+        next_state_Q = torch.where(next_state == 0, next_state_Q, torch.tensor(-1e2).cuda()) # mask out illegal moves
         best_action_flatten = torch.argmax(next_state_Q.squeeze(1).view(self.batch_size, -1), -1)
         best_action = torch.stack([best_action_flatten // self.action_dim[1], best_action_flatten % self.action_dim[1]], -1)
         best_action_x, best_action_y = torch.tensor(list(zip(*best_action)))
 
-        next_Q = self.net(next_state, model='target')
-        next_Q = torch.where(next_state == 0, next_Q, torch.tensor(-1e4).cuda()) # mask out illegal moves
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=self.enable_f16):
+            next_Q = self.net(next_state, model='target')
+        next_Q = next_Q.float()
+        next_Q = torch.where(next_state == 0, next_Q, torch.tensor(-1e2).cuda()) # mask out illegal moves
         next_Q = next_Q[np.arange(0, self.batch_size), 0, best_action_x, best_action_y]
         return (reward + (1 - done.float()) * self.gamma * next_Q).float()
     
     def update_Q_online(self, td_estimate, td_target):
         td_estimate = td_estimate.to(self.device)
         td_target = td_target.to(self.device)
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
-            loss = self.loss_fn(td_estimate, td_target)
+        loss = self.loss_fn(td_estimate, td_target)
         self.optimizer.zero_grad()
         self.scaler.scale(loss).backward()
         self.scaler.step(self.optimizer)
         self.scaler.update()
+        self.scheduler.step()
         return loss.item()
 
     def sync_Q_target(self):
