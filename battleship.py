@@ -14,12 +14,14 @@ if __name__ == '__main__':
         'turns': MeanMetric(),
         'q': MeanMetric(),
         'loss': MeanMetric(),
+        'reward': MeanMetric(),
     }
 
     episodes = 1000000
     for e in range(episodes):
         mean_metrics['loss'].reset()
         mean_metrics['q'].reset()
+        mean_metrics['reward'].reset()
 
         state = env.random_init()
 
@@ -35,17 +37,25 @@ if __name__ == '__main__':
             agents[env.player_turn].cache(state, next_state, action, reward, done)
             q, loss = agents[env.player_turn].learn()
 
+            mean_metrics['reward'].update(reward)
             if q is not None and loss is not None:
                 mean_metrics['loss'].update(loss)
                 mean_metrics['q'].update(q)
-
+            
             if done:
                 mean_metrics['turns'].update(env.turns)
-                metrics = {'turns': env.turns, 'mean_turns': mean_metrics['turns'].value(), 'loss': mean_metrics['loss'].value(), 'q': mean_metrics['loss'].value()}
+                metrics = {
+                    'turns': env.turns, 
+                    'mean_turns': mean_metrics['turns'].value(), 
+                    'loss': mean_metrics['loss'].value(), 
+                    'q': mean_metrics['q'].value(), 
+                    'reward': mean_metrics['reward'].value()
+                }
                 agents[env.player_turn].write_tb(metrics)
                 print(f'exploration rate: {agents[env.player_turn].exploration_rate}')
                 print(f'episode {e}, step {env.turns}, agent {env.player_turn}')
                 print(f"mean turns: {mean_metrics['turns'].value()}")
+                print(f"mean reward: {mean_metrics['reward'].value()}")
                 print(f"mean loss: {mean_metrics['loss'].value()}")
                 print(f"mean q: {mean_metrics['q'].value()}")
                 print()
