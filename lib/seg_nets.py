@@ -1,8 +1,8 @@
 import torch
-from torch import nn
 import torch.nn.functional as f
+from torch import nn
 
-from lib.blocks import MetaResBlock, MetaFFCBlock, EfficientAttention, DAPPM
+from lib.blocks import DAPPM, EfficientAttention, MetaFFCBlock, MetaResBlock
 
 eps = 1e-3
 momentum = 0.01

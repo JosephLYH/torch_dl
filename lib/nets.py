@@ -1,11 +1,11 @@
-import torch
-from torch import nn
 import copy
 
-try:
-    from lib.blocks import ResidualBlock, AttentionBlock, FoundationTransformerBlock
-except ImportError:
-    from blocks import ResidualBlock, AttentionBlock, FoundationTransformerBlock
+import torch
+from torch import nn
+
+from lib.blocks import (AttentionBlock, FoundationTransformerBlock,
+                        ResidualBlock)
+
 
 class MarioNet(nn.Module):
     def __init__(self, input_dim, output_dim):
