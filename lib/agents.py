@@ -205,7 +205,7 @@ class Battleship(Agent):
 
         self.burnin = self.batch_size  # min. experiences before training
         self.learn_every = 64  # no. of experiences between updates to Q_online
-        self.sync_every = 2048  # no. of experiences between Q_target & Q_online sync
+        self.sync_every = 5000  # no. of experiences between Q_target & Q_online sync
 
         self.time_start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
         self.save_dir = os.path.join('battleship', self.time_start, 'checkpoints', str(self.player))
